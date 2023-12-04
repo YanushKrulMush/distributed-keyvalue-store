@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	node := nodes.NewNode(1)
+	node := nodes.NewNode(2)
 	go node.StartRPCServer()
 
 	// Replace these addresses with the actual addresses of your nodes.
