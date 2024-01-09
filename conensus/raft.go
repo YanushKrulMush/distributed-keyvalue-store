@@ -36,6 +36,8 @@ type Raft struct {
 	state         State
 	electionTimer *time.Timer
 	applyCh       chan ApplyMsg
+	peers         []Raft // Assuming there's a Node type for peer communication
+	leaderID      int
 }
 
 // ApplyMsg represents a message to apply to the state machine.
@@ -43,6 +45,20 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+}
+
+// RequestVoteArgs represents the arguments for the RequestVote RPC.
+type RequestVoteArgs struct {
+	Term         int
+	CandidateID  int
+	LastLogIndex int
+	LastLogTerm  int
+}
+
+// RequestVoteReply represents the reply for the RequestVote RPC.
+type RequestVoteReply struct {
+	Term        int
+	VoteGranted bool
 }
 
 // NewRaft creates a new Raft node with the given ID.
@@ -71,14 +87,95 @@ func (r *Raft) startElection() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.state == Leader {
+		// If the node is already the leader, reset the election timer and return.
+		r.electionTimer.Reset(randomElectionTimeout())
+		return
+	}
+
 	r.state = Candidate
 	r.currentTerm++
 	r.votedFor = r.ID
 	r.electionTimer.Reset(randomElectionTimeout())
 
-	// Send RequestVote RPCs to other nodes
+	// Request votes from other nodes
+	args := RequestVoteArgs{
+		Term:         r.currentTerm,
+		CandidateID:  r.ID,
+		LastLogIndex: len(r.log) - 1,
+		LastLogTerm:  r.log[len(r.log)-1].Term,
+	}
 
-	// Handle votes from other nodes
+	var votesReceived int
+	voteCh := make(chan bool, len(r.peers))
+
+	for _, peer := range r.peers {
+		go func(peerID int) {
+			var reply RequestVoteReply
+			if r.sendRequestVote(peerID, &args, &reply) {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+
+				if reply.VoteGranted {
+					votesReceived++
+					if votesReceived >= len(r.peers)/2+1 {
+						// Received majority of votes, become the leader
+						r.state = Leader
+						r.leaderID = r.ID
+
+						// Initialize leader-specific data structures and start sending heartbeats
+						// r.initLeaderState()
+
+						fmt.Printf("Node %d became the leader (Term %d)\n", r.ID, r.currentTerm)
+					}
+				} else if reply.Term > r.currentTerm {
+					// Detected a higher term, transition to Follower state
+					r.state = Follower
+					r.currentTerm = reply.Term
+					r.votedFor = -1
+				}
+			}
+			voteCh <- reply.VoteGranted
+		}(peer.ID)
+	}
+
+	// Wait for the votes to be collected
+	votesNeeded := len(r.peers)/2 + 1
+	votesReceived = 1 // Count the vote from the candidate itself
+	for i := 0; i < len(r.peers)-1; i++ {
+		if <-voteCh {
+			votesReceived++
+		}
+		if votesReceived >= votesNeeded {
+			// Received majority of votes, become the leader
+			r.state = Leader
+			r.leaderID = r.ID
+
+			// Initialize leader-specific data structures and start sending heartbeats
+			// r.initLeaderState()
+
+			fmt.Printf("Node %d became the leader (Term %d)\n", r.ID, r.currentTerm)
+			return
+		}
+	}
+
+	// Did not receive majority of votes, reset to Follower state
+	r.state = Follower
+	r.currentTerm++
+	r.votedFor = -1
+	fmt.Printf("Node %d did not receive majority of votes, back to Follower state (Term %d)\n", r.ID, r.currentTerm)
+}
+
+// sendRequestVote sends a RequestVote RPC to another node.
+func (r *Raft) sendRequestVote(peerID int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	// Implement the logic to send a RequestVote RPC to the given peer and
+	// handle the reply. Return true if the RPC was successful, false otherwise.
+	// You can use Go's net/rpc package for this.
+	// Example:
+	// if err := r.peers[peerID].Call("Node.RequestVote", args, reply); err != nil {
+	//     return false
+	// }
+	return true
 }
 
 // ClientRequest handles a client request to set a value in the Raft cluster.
